@@ -1,6 +1,8 @@
-# 🔨 heph
+<p align="center">
+  <img src="docs/assets/heph-logo.png" alt="heph" width="420">
+</p>
 
-> A small, safe and readable coding agent for your terminal.
+<p align="center"><em>A small, safe and readable coding agent for your terminal.</em></p>
 
 heph reads your project, proposes changes as diffs, and runs commands, **always asking for your permission first**. It works with **OpenAI** or a **local model through LM Studio**, so your code never has to leave your machine.
 
