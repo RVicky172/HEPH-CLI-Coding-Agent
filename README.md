@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/heph-logo.png" alt="heph" width="420">
+  <img src="docs/assets/heph-logo.svg" alt="heph" width="420">
 </p>
 
 <p align="center"><em>A small, safe and readable coding agent for your terminal.</em></p>
