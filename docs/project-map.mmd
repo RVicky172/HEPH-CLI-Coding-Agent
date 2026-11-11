@@ -1,0 +1,130 @@
+%% heph architecture map (as of M4.1)
+%% Read top to bottom: one user turn flows from the terminal, through the agent loop,
+%% out to the model and the tools, and back as events the UI renders.
+%%   solid arrow  = calls / uses at runtime
+%%   dotted arrow = port → the class that implements it (TerminalUI → Approver is the reverse: it implements that port)
+%%   dashed boxes = ports; core/ depends only on these, never on I/O
+
+flowchart TB
+    user(["You, in a terminal"])
+    api[("OpenAI-compatible API<br/>OpenAI · LM Studio")]
+    disk[("Project files<br/>workspace root")]
+    os[("OS shell<br/>PowerShell · /bin/sh")]
+
+    subgraph CLI["cli/ · entry point (commander)"]
+        index["index.ts<br/>fast --version, lazy-loads the rest"]
+        program["program.ts<br/>flags: -C, --profile, --mode"]
+    end
+
+    container[["container.ts · composition root<br/>the only place that creates real infrastructure"]]
+
+    subgraph CONFIG["config/"]
+        configLoader["ConfigLoader<br/>user + project config<br/>project may not set baseURL / apiKey"]
+    end
+
+    subgraph UI["ui/ · the only layer that touches stdin/stdout"]
+        terminalUI["TerminalUI<br/>InputSource · OutputSink<br/>InterruptSource · Approver"]
+        chatRepl["ChatRepl<br/>read → turn → render loop"]
+        paste["PasteAwareLineReader"]
+        slash["SlashCommandRegistry<br/>/help /undo /mode …"]
+        turnRenderer["TurnRenderer<br/>events → text, Markdown blocks,<br/>diffs, hammer spinner"]
+    end
+
+    subgraph CORE["core/ · pure logic, no I/O (ESLint-enforced)"]
+        agent["Agent.runTurn()<br/>async generator of AgentEvents"]
+        conversation["Conversation · Message"]
+        systemPrompt["SystemPromptBuilder"]
+        toolRunner[/"ToolRunner port"/]
+        errors["HephError · LLMError<br/>user-facing hint"]
+    end
+
+    subgraph LLM["llm/"]
+        llmProvider[/"LLMProvider port<br/>provider-neutral ChatChunk"/]
+        factory["ProviderFactory"]
+        openaiProvider["OpenAICompatibleProvider<br/>only importer of openai SDK"]
+        scripted["ScriptedProvider<br/>fake for tests"]
+    end
+
+    subgraph TOOLS["tools/"]
+        executor["ToolExecutor<br/>preview → gate → execute<br/>never throws"]
+        registry["ToolRegistry"]
+        readTools["read_file · list_directory<br/>glob · grep"]
+        writeTools["edit_file · write_file<br/>with diff preview"]
+        runCommand["run_command<br/>+ DangerousCommandDetector"]
+    end
+
+    subgraph PERMS["permissions/"]
+        gate[/"PermissionGate port"/]
+        policyGate["PolicyPermissionGate<br/>mode + reads policy + allow/deny rules"]
+        approver[/"Approver port"/]
+    end
+
+    subgraph WS["workspace/ · every file access goes through here"]
+        workspace["Workspace<br/>read-only"]
+        writer["WorkspaceWriter<br/>read-before-edit, staleness,<br/>protected paths"]
+        guard["PathGuard + IgnoreRules<br/>no escape: .. / absolute / symlink"]
+        checkpoints["CheckpointStore<br/>powers /undo"]
+    end
+
+    subgraph SHELL["shell/"]
+        shellPort[/"Shell port"/]
+        nodeShell["NodeShell<br/>timeout + process-tree kill"]
+    end
+
+    %% startup and wiring
+    index --> program --> container
+    container -. loads .-> configLoader
+    container -. wires .-> chatRepl
+
+    %% one turn
+    user <--> terminalUI
+    terminalUI --> paste
+    terminalUI --> chatRepl
+    chatRepl --> slash
+    chatRepl -->|"user message"| agent
+    agent --> conversation
+    agent --> systemPrompt
+    agent -->|"stream"| llmProvider
+    agent -->|"tool calls"| toolRunner
+    agent -->|"yields AgentEvents"| turnRenderer
+    turnRenderer --> terminalUI
+
+    %% model side
+    factory -->|"builds"| openaiProvider
+    llmProvider -.-> openaiProvider
+    llmProvider -.-> scripted
+    openaiProvider -->|"HTTP + SSE"| api
+
+    %% tool side
+    toolRunner -.-> executor
+    executor --> registry
+    executor -->|"ask before acting"| gate
+    gate -.-> policyGate
+    policyGate --> approver
+    terminalUI -.-> approver
+    registry --> readTools & writeTools & runCommand
+    readTools --> workspace
+    writeTools --> writer
+    writeTools --> checkpoints
+    runCommand --> shellPort
+    shellPort -.-> nodeShell
+    workspace --> guard
+    writer --> guard
+    guard --> disk
+    nodeShell --> os
+
+    classDef port fill:#fff8e1,stroke:#b8860b,stroke-width:1.5px,stroke-dasharray:5 3,color:#3d2c00
+    classDef coreNode fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px,color:#0d2a4d
+    classDef ioNode fill:#f1f8e9,stroke:#558b2f,color:#1b3409
+    classDef safety fill:#fdecea,stroke:#c62828,color:#4a0e0e
+    classDef root fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#24124d
+    classDef external fill:#eceff1,stroke:#546e7a,color:#1c262b
+    classDef fake fill:#fafafa,stroke:#9e9e9e,stroke-dasharray:2 2,color:#424242
+
+    class toolRunner,llmProvider,gate,approver,shellPort port
+    class agent,conversation,systemPrompt,errors coreNode
+    class terminalUI,chatRepl,paste,slash,turnRenderer,openaiProvider,factory,nodeShell,configLoader,index,program,registry,readTools ioNode
+    class executor,policyGate,writeTools,runCommand,workspace,writer,guard,checkpoints safety
+    class container root
+    class user,api,disk,os external
+    class scripted fake
